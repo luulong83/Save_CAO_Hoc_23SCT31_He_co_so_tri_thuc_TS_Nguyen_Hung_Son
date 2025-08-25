@@ -16,8 +16,8 @@ class DiseaseClassifier(nn.Module):
     def forward(self, x):
         return self.model(x)
 
-# Trong model.py, thay thế hàm train_model
-def train_model(data_dir='chest_xray', epochs=3, batch_size=8, progress_bar=False):
+# Hàm train_model có thêm tham số learning_rate
+def train_model(data_dir='chest_xray', epochs=3, batch_size=8, learning_rate=0.0005, progress_bar=False):
     # Transforms
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
@@ -27,23 +27,30 @@ def train_model(data_dir='chest_xray', epochs=3, batch_size=8, progress_bar=Fals
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
+
     # Load datasets
     train_dataset = datasets.ImageFolder(f'{data_dir}/train', transform=transform)
     val_dataset = datasets.ImageFolder(f'{data_dir}/val', transform=transform)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    # Model, loss, optimizer (chạy trên CPU)
+
+    # Model, loss, optimizer
     device = torch.device('cpu')
     model = DiseaseClassifier().to(device)
+
     # Thêm class weights cho dataset không cân bằng
     class_weights = torch.tensor([1.0, 3.875/1.341]).to(device)  # NORMAL: 1.0, PNEUMONIA: ~2.89
     criterion = nn.CrossEntropyLoss(weight=class_weights)
-    optimizer = optim.Adam(model.parameters(), lr=0.0005)  # Thêm learning rate mặc định
+
+    # Dùng learning_rate truyền vào
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
     # Train loop
     for epoch in range(epochs):
         model.train()
         running_loss = 0.0
         batch_iterator = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", unit="batch") if progress_bar else train_loader
+
         for inputs, labels in batch_iterator:
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
@@ -52,9 +59,12 @@ def train_model(data_dir='chest_xray', epochs=3, batch_size=8, progress_bar=Fals
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
+
             if progress_bar:
                 batch_iterator.set_postfix(loss=running_loss / (batch_iterator.n + 1))
+
         print(f'Epoch {epoch+1}/{epochs}, Loss: {running_loss/len(train_loader):.4f}')
+
     # Save model
     torch.save(model.state_dict(), 'trained_model.pth')
     print('Model trained and saved as trained_model.pth')
@@ -83,11 +93,11 @@ def analyze_image(image_path):
     with torch.no_grad():
         output = model(img)
         pred = torch.softmax(output, dim=1)
-    
+
     # Map to symptoms (giả lập dựa trên prediction)
     if pred[0][1] > 0.5:  # PNEUMONIA
         symptoms = ["cough", "fever", "chest_pain"]
     else:
         symptoms = []
-    
+
     return {"symptoms": symptoms}

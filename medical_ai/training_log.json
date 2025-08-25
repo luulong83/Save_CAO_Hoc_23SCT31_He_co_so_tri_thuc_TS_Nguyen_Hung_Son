@@ -1,0 +1,1 @@
+{"dataset": "chest_xray", "epochs": 5, "batch_size": 8, "learning_rate": 0.0005, "start_time": "2025-08-25 20:11:35", "train_loss": [], "val_loss": [], "duration_minutes": 27.99397229750951}

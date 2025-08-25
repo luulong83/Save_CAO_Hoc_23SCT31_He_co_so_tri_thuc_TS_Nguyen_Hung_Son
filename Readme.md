@@ -8,6 +8,8 @@ Nếu chưa có Python, tải từ https://www.python.org/downloads/ (chọn Pyt
 Mở Command Prompt (Windows) hoặc Terminal (nếu dùng Linux/Mac), tạo virtual environment:
 
 # python -m venv medical_ai_env
+# pip install pyswip
+
 
 Kích hoạt (Windows: medical_ai_env\Scripts\activate; Linux/Mac: source medical_ai_env/bin/activate).
 Cài thư viện cần thiết (chạy trên CPU, không cần CUDA):
@@ -38,3 +40,6 @@ swipl
 
 # Thoát
 ?- halt.
+
+
+# streamlit run app_streamlit.py
