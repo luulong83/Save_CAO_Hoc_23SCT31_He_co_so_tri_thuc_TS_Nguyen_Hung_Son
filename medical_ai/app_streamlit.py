@@ -52,7 +52,7 @@ def integrate_ml_prolog(image_path, medical_history={}):
         prolog.assertz("current_symptom(shortness_of_breath)")
         debug_info.append("Đã thêm: current_symptom(shortness_of_breath)")
 
-    # Thêm normal_flag nếu diagnosis là NORMAL
+    # Chỉ thêm normal_flag nếu diagnosis là NORMAL
     if diagnosis == "NORMAL":
         prolog.assertz("current_symptom(normal_flag)")
         debug_info.append("Đã thêm: current_symptom(normal_flag)")
@@ -70,6 +70,8 @@ def integrate_ml_prolog(image_path, medical_history={}):
     if results:
         diagnoses = []
         seen = set()
+        # Ưu tiên chẩn đoán từ mô hình
+        ml_diagnosis = "pneumonia" if diagnosis == "PNEUMONIA" else "normal"
         for result in results:
             diag = safe_decode(result['D'])
             treat = safe_decode(result['T'])
@@ -83,6 +85,13 @@ def integrate_ml_prolog(image_path, medical_history={}):
             for d in diagnoses
             if "covid" in d and medical_history.get("shortness_of_breath", False)
         ]
+        # Nếu không có covid, ưu tiên chẩn đoán từ mô hình
+        if not treatment:
+            treatment = [
+                d.split(": ")[1]
+                for d in diagnoses
+                if ml_diagnosis in d
+            ]
         return {
             "chan_doan": ", ".join(diagnoses),
             "dieu_tri": treatment[0] if treatment else diagnoses[0].split(": ")[1],
