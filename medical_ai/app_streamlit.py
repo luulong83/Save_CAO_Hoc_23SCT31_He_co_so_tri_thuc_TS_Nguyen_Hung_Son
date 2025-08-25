@@ -24,33 +24,27 @@ def integrate_ml_prolog(image_path, medical_history={}):
     prolog.consult("medical_rules.pl")
 
     debug_info = []
-    debug_info.append(f"Triệu chứng từ mô hình: {symptoms}")
+    debug_info.append(f"Symptoms from model: {symptoms}")
 
-    # Thêm các triệu chứng từ model, chuyển sang tiếng Việt không dấu
-    symptom_map = {
-        "cough": "ho",
-        "fever": "sot",
-        "chest_pain": "dau_nguc"
-    }
+    # Thêm các triệu chứng từ model
     for sym in symptoms:
-        sym_vn = symptom_map.get(sym, sym)  # Chuyển sang tên tiếng Việt
-        prolog.assertz(f"trieu_chung({sym_vn})")
-        debug_info.append(f"Đã thêm từ mô hình: trieu_chung({sym_vn})")
+        prolog.assertz(f"current_symptom({sym})")
+        debug_info.append(f"Asserted from model: current_symptom({sym})")
 
     # Thêm triệu chứng bổ sung
     if medical_history.get("fatigue", False):
-        prolog.assertz("trieu_chung(met_moi)")
-        debug_info.append("Đã thêm: trieu_chung(met_moi)")
+        prolog.assertz("current_symptom(fatigue)")
+        debug_info.append("Asserted: current_symptom(fatigue)")
     if medical_history.get("shortness_of_breath", False):
-        prolog.assertz("trieu_chung(kho_tho)")
-        debug_info.append("Đã thêm: trieu_chung(kho_tho)")
+        prolog.assertz("current_symptom(shortness_of_breath)")
+        debug_info.append("Asserted: current_symptom(shortness_of_breath)")
 
     # Query tất cả chẩn đoán
-    results = list(prolog.query("chan_doan(D), dieu_tri(D, T)"))
+    results = list(prolog.query("diagnosis(D), treatment(D, T)"))
 
-    # Debug: Kiểm tra trieu_chung sau assert
-    current_syms = list(prolog.query("trieu_chung(X)"))
-    debug_info.append(f"Các triệu chứng hiện tại trong Prolog: {current_syms}")
+    # Debug: Kiểm tra current_symptom sau assert
+    current_syms = list(prolog.query("current_symptom(X)"))
+    debug_info.append(f"Current symptoms in Prolog: {current_syms}")
 
     if results:
         diagnoses = []
@@ -62,51 +56,52 @@ def integrate_ml_prolog(image_path, medical_history={}):
                 diagnoses.append(f"{diagnosis}: {treatment}")
                 seen.add(diagnosis)
 
-        # Ưu tiên covid nếu có khó thở
+        # Ưu tiên covid nếu shortness_of_breath
         treatment = [
             d.split(": ")[1]
             for d in diagnoses
             if "covid" in d and medical_history.get("shortness_of_breath", False)
         ]
         if treatment:
-            return {"chan_doan": ", ".join(diagnoses), "dieu_tri": treatment[0], "debug": debug_info}
+            return {"diagnosis": ", ".join(diagnoses), "treatment": treatment[0], "debug": debug_info}
 
         return {
-            "chan_doan": ", ".join(diagnoses),
-            "dieu_tri": diagnoses[0].split(": ")[1] if diagnoses else "Tu van bac si",
+            "diagnosis": ", ".join(diagnoses),
+            "treatment": diagnoses[0].split(": ")[1] if diagnoses else "Tư vấn bác sĩ",
             "debug": debug_info
         }
     else:
-        return {"chan_doan": "khong_xac_dinh", "dieu_tri": "Tu van bac si", "debug": debug_info}
+        return {"diagnosis": "unknown", "treatment": "Tư vấn bác sĩ", "debug": debug_info}
+
 
 # =======================
 # Giao diện Streamlit
 # =======================
-st.set_page_config(page_title="He Thong Y Te Thong Minh", layout="wide")
+st.set_page_config(page_title="Hệ Thống Y Tế Thông Minh", layout="wide")
 
 # Chia cột
 col1, col2 = st.columns([2, 1])
 with col1:
-    st.title("He Thong Y Te Thong Minh")
-    uploaded_file = st.file_uploader("Chon anh X-quang", type=["jpg", "jpeg", "png"])
+    st.title("Hệ Thống Y Tế Thông Minh")
+    uploaded_file = st.file_uploader("Chọn ảnh X-ray", type=["jpg", "jpeg", "png"])
 
     # Hiển thị placeholder nếu chưa upload
     if not uploaded_file and os.path.exists("placeholder.jpg"):
-        st.image("placeholder.jpg", caption="Chua upload anh", use_container_width=True)
+        st.image("placeholder.jpg", caption="Chưa upload ảnh", use_container_width=True)
     elif uploaded_file:
         image_path = "temp.jpg"
         with open(image_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
-        st.image(image_path, caption="Anh X-quang da upload", use_container_width=True)
+        st.image(image_path, caption="Ảnh X-ray đã upload", use_container_width=True)
         if os.path.exists(image_path):
             os.remove(image_path)
 
 with col2:
-    st.write("**Trieu chung bo sung**")
-    fatigue = st.checkbox("Co trieu chung met moi")
-    shortness_of_breath = st.checkbox("Co trieu chung kho tho")
+    st.write("**Triệu chứng bổ sung**")
+    fatigue = st.checkbox("Có triệu chứng mệt mỏi (fatigue)")
+    shortness_of_breath = st.checkbox("Có triệu chứng khó thở (shortness_of_breath)")
 
-    if st.button("Chan doan"):
+    if st.button("Chẩn đoán"):
         if uploaded_file is not None:
             image_path = "temp.jpg"
             with open(image_path, "wb") as f:
@@ -115,17 +110,17 @@ with col2:
                 "fatigue": fatigue,
                 "shortness_of_breath": shortness_of_breath,
             }
-            st.write("Dang su dung model da train tu trained_model.pth...")
-            with st.spinner("Dang phan tich..."):
+            st.write("Đang sử dụng model đã train từ trained_model.pth...")
+            with st.spinner("Đang phân tích..."):
                 result = integrate_ml_prolog(image_path, medical_history)
 
             # Kết quả chính
-            st.success("Ket qua chan doan:")
-            st.markdown("**Chan doan:** " + result['chan_doan'], unsafe_allow_html=True)
-            st.markdown("**Dieu tri:** " + result['dieu_tri'], unsafe_allow_html=True)
+            st.success("Kết quả chẩn đoán:")
+            st.markdown("**Chẩn đoán:** " + result['diagnosis'], unsafe_allow_html=True)
+            st.markdown("**Điều trị:** " + result['treatment'], unsafe_allow_html=True)
 
             # Hiển thị quá trình suy luận
-            with st.expander("Xem qua trinh suy luan chi tiet"):
+            with st.expander("Xem quá trình suy luận chi tiết"):
                 for line in result.get("debug", []):
                     st.write(line)
 
@@ -145,4 +140,4 @@ with col2:
             if os.path.exists(image_path):
                 os.remove(image_path)
         else:
-            st.error("Vui long upload anh X-quang truoc!")
+            st.error("Vui lòng upload ảnh X-ray trước!")

@@ -6,9 +6,8 @@ from torch.utils.data import DataLoader
 from PIL import Image
 from tqdm import tqdm
 
-# Định nghĩa model (ResNet18 pre-trained, fine-tune)
 class DiseaseClassifier(nn.Module):
-    def __init__(self, num_classes=2):  # 0: NORMAL, 1: PNEUMONIA
+    def __init__(self, num_classes=2):
         super().__init__()
         self.model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
         self.model.fc = nn.Linear(self.model.fc.in_features, num_classes)
@@ -16,39 +15,49 @@ class DiseaseClassifier(nn.Module):
     def forward(self, x):
         return self.model(x)
 
-# Hàm train_model có thêm tham số learning_rate
-def train_model(data_dir='chest_xray', epochs=3, batch_size=8, learning_rate=0.0005, progress_bar=False):
-    # Transforms
-    transform = transforms.Compose([
+def train_model(data_dir='chest_xray', epochs=10, batch_size=5, learning_rate=0.0005, progress_bar=False):
+    transform_train = transforms.Compose([
         transforms.Resize((224, 224)),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(10),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomRotation(15),
+        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3),
+        transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    transform_val = transforms.Compose([
+        transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-    # Load datasets
-    train_dataset = datasets.ImageFolder(f'{data_dir}/train', transform=transform)
-    val_dataset = datasets.ImageFolder(f'{data_dir}/val', transform=transform)
+    train_dataset = datasets.ImageFolder(f'{data_dir}/train', transform=transform_train)
+    val_dataset = datasets.ImageFolder(f'{data_dir}/val', transform=transform_val)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-    # Model, loss, optimizer
-    device = torch.device('cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = DiseaseClassifier().to(device)
-
-    # Thêm class weights cho dataset không cân bằng
-    class_weights = torch.tensor([1.0, 3.875/1.341]).to(device)  # NORMAL: 1.0, PNEUMONIA: ~2.89
+    class_weights = torch.tensor([1.5, 3.875/1.341]).to(device)  # Tăng trọng số NORMAL
     criterion = nn.CrossEntropyLoss(weight=class_weights)
-
-    # Dùng learning_rate truyền vào
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-    # Train loop
+    history = {
+        'train_loss': [],
+        'val_loss': [],
+        'train_accuracy': [],
+        'val_accuracy': []
+    }
+
+    best_val_loss = float('inf')
+    patience = 3
+    counter = 0
+
     for epoch in range(epochs):
         model.train()
         running_loss = 0.0
+        correct = 0
+        total = 0
         batch_iterator = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", unit="batch") if progress_bar else train_loader
 
         for inputs, labels in batch_iterator:
@@ -59,25 +68,58 @@ def train_model(data_dir='chest_xray', epochs=3, batch_size=8, learning_rate=0.0
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
-
+            _, predicted = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
             if progress_bar:
                 batch_iterator.set_postfix(loss=running_loss / (batch_iterator.n + 1))
 
-        print(f'Epoch {epoch+1}/{epochs}, Loss: {running_loss/len(train_loader):.4f}')
+        train_loss = running_loss / len(train_loader)
+        train_accuracy = 100 * correct / total
+        history['train_loss'].append(train_loss)
+        history['train_accuracy'].append(train_accuracy)
+        print(f'Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.2f}%')
 
-    # Save model
+        model.eval()
+        val_loss = 0.0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for inputs, labels in val_loader:
+                inputs, labels = inputs.to(device), labels.to(device)
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item()
+                _, predicted = torch.max(outputs, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+
+        val_loss = val_loss / len(val_loader)
+        val_accuracy = 100 * correct / total
+        history['val_loss'].append(val_loss)
+        history['val_accuracy'].append(val_accuracy)
+        print(f'Epoch {epoch+1}/{epochs}, Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.2f}%')
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            counter = 0
+            torch.save(model.state_dict(), 'best_model.pth')
+        else:
+            counter += 1
+            if counter >= patience:
+                print(f'Early stopping at epoch {epoch+1}')
+                break
+
     torch.save(model.state_dict(), 'trained_model.pth')
     print('Model trained and saved as trained_model.pth')
+    return history
 
-# Hàm analyze_image (sử dụng model đã train)
 def analyze_image(image_path):
-    # Load model
     device = torch.device('cpu')
     model = DiseaseClassifier().to(device)
     model.load_state_dict(torch.load('trained_model.pth', map_location=device))
     model.eval()
 
-    # Transform
     transform = transforms.Compose([
         transforms.Resize(128),
         transforms.CenterCrop(112),
@@ -85,19 +127,26 @@ def analyze_image(image_path):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-    # Load image
     img = Image.open(image_path).convert('RGB')
     img = transform(img).unsqueeze(0).to(device)
 
-    # Predict
     with torch.no_grad():
         output = model(img)
         pred = torch.softmax(output, dim=1)
 
-    # Map to symptoms (giả lập dựa trên prediction)
-    if pred[0][1] > 0.5:  # PNEUMONIA
+    prob_pneumonia = pred[0][1].item()
+    prob_normal = pred[0][0].item()
+    threshold = 0.95  # Giảm ngưỡng để thử nghiệm
+    if prob_pneumonia >= threshold:
+        diagnosis = "PNEUMONIA"
         symptoms = ["cough", "fever", "chest_pain"]
     else:
+        diagnosis = "NORMAL"
         symptoms = []
 
-    return {"symptoms": symptoms}
+    return {
+        "diagnosis": diagnosis,
+        "prob_normal": prob_normal,
+        "prob_pneumonia": prob_pneumonia,
+        "symptoms": symptoms
+    }
