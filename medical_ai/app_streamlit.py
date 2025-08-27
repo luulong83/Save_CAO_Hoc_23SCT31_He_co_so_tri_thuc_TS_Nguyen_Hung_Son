@@ -35,19 +35,41 @@ def integrate_ml_prolog(image_path, medical_history={}):
     prolog = Prolog()
     try:
         prolog.consult("medical_rules.pl")
+        debug_info.append("Đã load medical_rules.pl thành công")
     except Exception as e:
         debug_info.append(f"Lỗi khi load medical_rules.pl: {str(e)}")
         return {"chan_doan": "unknown", "dieu_tri": f"Lỗi Prolog: {str(e)}", "debug": debug_info}
 
-    # Xóa tất cả các triệu chứng hiện tại trước khi thêm mới
+    # Kiểm tra triệu chứng trước retractall
+    current_syms = list(prolog.query("current_symptom(X)"))
+    debug_info.append(f"Triệu chứng trước retractall: {current_syms}")
+
+    # Xóa tất cả các triệu chứng hiện tại
     try:
         prolog.query("retractall(current_symptom(_))")
         debug_info.append("Đã xóa tất cả các triệu chứng hiện tại trong Prolog")
-        # Kiểm tra xem triệu chứng có thực sự bị xóa không
         current_syms = list(prolog.query("current_symptom(X)"))
         debug_info.append(f"Triệu chứng sau retractall: {current_syms}")
+        if current_syms:
+            debug_info.append("Cảnh báo: Triệu chứng vẫn tồn tại sau retractall! Bỏ qua triệu chứng hiện tại...")
+            prolog = Prolog()  # Khởi tạo lại Prolog
+            prolog.consult("medical_rules.pl")
+            current_syms = list(prolog.query("current_symptom(X)"))
+            debug_info.append(f"Triệu chứng sau khi khởi tạo lại Prolog: {current_syms}")
+            if current_syms:
+                debug_info.append("Lỗi nghiêm trọng: Triệu chứng vẫn tồn tại sau khởi tạo lại Prolog! Bỏ qua Prolog hiện tại.")
+                # Chỉ sử dụng triệu chứng từ symptoms và medical_history
+                expected_syms = set(symptoms)
+                if medical_history.get("fatigue", False):
+                    expected_syms.add("fatigue")
+                if medical_history.get("shortness_of_breath", False):
+                    expected_syms.add("shortness_of_breath")
+                if diagnosis == "NORMAL":
+                    expected_syms.add("normal_flag")
+                debug_info.append(f"Sử dụng triệu chứng dự kiến: {expected_syms}")
     except Exception as e:
         debug_info.append(f"Lỗi khi xóa triệu chứng bằng retractall: {str(e)}")
+        return {"chan_doan": "unknown", "dieu_tri": "Lỗi Prolog", "debug": debug_info}
 
     # Thêm triệu chứng từ mô hình
     for sym in symptoms:
@@ -74,8 +96,14 @@ def integrate_ml_prolog(image_path, medical_history={}):
         debug_info.append(f"Lỗi query Prolog: {str(e)}")
         return {"chan_doan": "unknown", "dieu_tri": "Tư vấn bác sĩ", "debug": debug_info}
 
-    current_syms = list(prolog.query("current_symptom(X)"))
-    debug_info.append(f"Các triệu chứng hiện tại trong Prolog: {current_syms}")
+    # Loại bỏ triệu chứng trùng lặp
+    current_syms = list({s['X'] for s in prolog.query("current_symptom(X)")})
+    debug_info.append(f"Các triệu chứng hiện tại trong Prolog (không trùng lặp): {current_syms}")
+
+    # Nếu có lỗi trước đó, sử dụng triệu chứng dự kiến
+    if "Lỗi nghiêm trọng" in " ".join(debug_info):
+        current_syms = list(expected_syms)
+        debug_info.append(f"Đã sử dụng triệu chứng dự kiến thay thế: {current_syms}")
 
     if results:
         diagnoses = []
@@ -86,10 +114,9 @@ def integrate_ml_prolog(image_path, medical_history={}):
         for result in results:
             diag = safe_decode(result['D'])
             treat = safe_decode(result['T'])
-            # Chỉ thêm chẩn đoán nếu phù hợp
             if (diag == ml_diagnosis or
-                (diag == "flu" and medical_history.get("fatigue", False) and "fever" in [s['X'] for s in current_syms]) or
-                (diag == "covid" and medical_history.get("shortness_of_breath", False) and "fever" in [s['X'] for s in current_syms])):
+                (diag == "flu" and medical_history.get("fatigue", False) and "fever" in current_syms) or
+                (diag == "covid" and medical_history.get("shortness_of_breath", False) and "fever" in current_syms)):
                 if diag not in seen:
                     diagnoses.append(f"{diag}: {treat}")
                     seen.add(diag)
@@ -106,7 +133,7 @@ def integrate_ml_prolog(image_path, medical_history={}):
                 for d in diagnoses
                 if ml_diagnosis in d
             ]
-        if not treatment:  # Nếu không có chẩn đoán phù hợp, lấy chẩn đoán đầu tiên
+        if not treatment:
             treatment = [diagnoses[0].split(": ")[1]] if diagnoses else ["Tư vấn bác sĩ"]
 
         return {
