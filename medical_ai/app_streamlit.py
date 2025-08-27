@@ -39,6 +39,13 @@ def integrate_ml_prolog(image_path, medical_history={}):
         debug_info.append(f"Lỗi khi load medical_rules.pl: {str(e)}")
         return {"chan_doan": "unknown", "dieu_tri": f"Lỗi Prolog: {str(e)}", "debug": debug_info}
 
+    # Xóa tất cả các triệu chứng hiện tại trước khi thêm mới
+    try:
+        prolog.query("retractall(current_symptom(_))")
+        debug_info.append("Đã xóa tất cả các triệu chứng hiện tại trong Prolog")
+    except Exception as e:
+        debug_info.append(f"Lỗi khi xóa triệu chứng bằng retractall: {str(e)}")
+
     # Thêm triệu chứng từ mô hình
     for sym in symptoms:
         prolog.assertz(f"current_symptom({sym})")
@@ -70,31 +77,38 @@ def integrate_ml_prolog(image_path, medical_history={}):
     if results:
         diagnoses = []
         seen = set()
-        # Ưu tiên chẩn đoán từ mô hình
         ml_diagnosis = "pneumonia" if diagnosis == "PNEUMONIA" else "normal"
+        
+        # Lọc chẩn đoán dựa trên triệu chứng bổ sung và mô hình AI
         for result in results:
             diag = safe_decode(result['D'])
             treat = safe_decode(result['T'])
-            if diag not in seen:
-                diagnoses.append(f"{diag}: {treat}")
-                seen.add(diag)
+            # Chỉ thêm chẩn đoán nếu phù hợp với triệu chứng bổ sung hoặc mô hình AI
+            if (diag == ml_diagnosis or
+                (diag == "flu" and medical_history.get("fatigue", False)) or
+                (diag == "covid" and medical_history.get("shortness_of_breath", False))):
+                if diag not in seen:
+                    diagnoses.append(f"{diag}: {treat}")
+                    seen.add(diag)
 
-        # Ưu tiên covid nếu có shortness_of_breath
+        # Ưu tiên điều trị
         treatment = [
             d.split(": ")[1]
             for d in diagnoses
             if "covid" in d and medical_history.get("shortness_of_breath", False)
         ]
-        # Nếu không có covid, ưu tiên chẩn đoán từ mô hình
         if not treatment:
             treatment = [
                 d.split(": ")[1]
                 for d in diagnoses
                 if ml_diagnosis in d
             ]
+        if not treatment:  # Nếu không có chẩn đoán phù hợp, lấy chẩn đoán đầu tiên
+            treatment = [diagnoses[0].split(": ")[1]] if diagnoses else ["Tư vấn bác sĩ"]
+
         return {
-            "chan_doan": ", ".join(diagnoses),
-            "dieu_tri": treatment[0] if treatment else diagnoses[0].split(": ")[1],
+            "chan_doan": ", ".join(diagnoses) if diagnoses else "unknown",
+            "dieu_tri": treatment[0],
             "debug": debug_info
         }
     return {"chan_doan": "unknown", "dieu_tri": "Tư vấn bác sĩ", "debug": debug_info}
