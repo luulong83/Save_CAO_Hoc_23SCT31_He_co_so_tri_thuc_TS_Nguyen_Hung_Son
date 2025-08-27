@@ -43,6 +43,9 @@ def integrate_ml_prolog(image_path, medical_history={}):
     try:
         prolog.query("retractall(current_symptom(_))")
         debug_info.append("Đã xóa tất cả các triệu chứng hiện tại trong Prolog")
+        # Kiểm tra xem triệu chứng có thực sự bị xóa không
+        current_syms = list(prolog.query("current_symptom(X)"))
+        debug_info.append(f"Triệu chứng sau retractall: {current_syms}")
     except Exception as e:
         debug_info.append(f"Lỗi khi xóa triệu chứng bằng retractall: {str(e)}")
 
@@ -83,10 +86,10 @@ def integrate_ml_prolog(image_path, medical_history={}):
         for result in results:
             diag = safe_decode(result['D'])
             treat = safe_decode(result['T'])
-            # Chỉ thêm chẩn đoán nếu phù hợp với triệu chứng bổ sung hoặc mô hình AI
+            # Chỉ thêm chẩn đoán nếu phù hợp
             if (diag == ml_diagnosis or
-                (diag == "flu" and medical_history.get("fatigue", False)) or
-                (diag == "covid" and medical_history.get("shortness_of_breath", False))):
+                (diag == "flu" and medical_history.get("fatigue", False) and "fever" in [s['X'] for s in current_syms]) or
+                (diag == "covid" and medical_history.get("shortness_of_breath", False) and "fever" in [s['X'] for s in current_syms])):
                 if diag not in seen:
                     diagnoses.append(f"{diag}: {treat}")
                     seen.add(diag)
