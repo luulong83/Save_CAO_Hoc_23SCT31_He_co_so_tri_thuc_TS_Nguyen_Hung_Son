@@ -10,35 +10,31 @@ import logging
 import tkinter as tk
 from tkinter import filedialog
 import matplotlib.pyplot as plt
-from heapq import nlargest
 
 # Thiết lập logging
-logging.basicConfig(filename='training.log', level=logging.DEBUG, 
+logging.basicConfig(filename='snake_training.log', level=logging.DEBUG, 
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Khởi tạo Pygame
 pygame.init()
 
 # Cài đặt trò chơi
-WINDOW_WIDTH = 600
-WINDOW_HEIGHT = 400
-PADDLE_WIDTH = 10
-PADDLE_HEIGHT = 100
-BALL_SIZE = 10
-PADDLE_SPEED = 5
-PADDLE_SPEED_OPPONENT = 5
-BALL_SPEED = 4
-BLOCK_SIZE = 20
+GRID_SIZE = 20  # Kích thước ô lưới
+GRID_WIDTH = 20  # Số ô theo chiều ngang
+GRID_HEIGHT = 20  # Số ô theo chiều dọc
+WINDOW_WIDTH = GRID_WIDTH * GRID_SIZE
+WINDOW_HEIGHT = GRID_HEIGHT * GRID_SIZE
+SNAKE_SPEED = 10  # FPS cho tốc độ di chuyển
 
 # Màu sắc
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
-AI_COLOR = (0, 255, 0)
-OPPONENT_COLOR = (255, 0, 0)
+SNAKE_COLOR = (0, 255, 0)
+FOOD_COLOR = (255, 0, 0)
 BUTTON_COLOR = (0, 100, 0)
 BUTTON_HOVER_COLOR = (0, 150, 0)
 
-# Lớp mô hình DQN
+# Lớp DQN (giữ nguyên từ mã Pong)
 class DQN(nn.Module):
     def __init__(self, state_size, action_size):
         super(DQN, self).__init__()
@@ -51,7 +47,7 @@ class DQN(nn.Module):
         x = torch.relu(self.fc2(x))
         return self.fc3(x)
 
-# Lớp Agent
+# Lớp Agent (giữ nguyên từ mã Pong)
 class Agent:
     def __init__(self, state_size, action_size):
         self.state_size = state_size
@@ -130,7 +126,7 @@ class Agent:
             self.epsilon *= self.epsilon_decay
             logging.info(f"Epsilon updated: {self.epsilon}")
 
-# Hàm chọn file mô hình
+# Hàm chọn file mô hình (giữ nguyên từ mã Pong)
 def select_model_file():
     root = tk.Tk()
     root.withdraw()
@@ -142,11 +138,11 @@ def select_model_file():
     root.destroy()
     return file_path
 
-# Lớp trò chơi Pong
-class PongGame:
+# Lớp trò chơi Snake
+class SnakeGame:
     def __init__(self, agent):
         self.display = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-        pygame.display.set_caption('Pong Game with DQN')
+        pygame.display.set_caption('Snake Game with DQN')
         self.font = pygame.font.SysFont('arial', 20)
         self.button_font = pygame.font.SysFont('arial', 15)
         self.agent = agent
@@ -155,35 +151,50 @@ class PongGame:
         self.paused = False
         self.showing_progress = False
         self.intelligence_level = 1
-        self.previous_y_distance = 0
-        self.previous_ai_y = WINDOW_HEIGHT // 2
         self.reset()
 
     def reset(self):
         self.game_count += 1
-        self.ai_paddle = pygame.Rect(50, WINDOW_HEIGHT // 2 - PADDLE_HEIGHT // 2, PADDLE_WIDTH, PADDLE_HEIGHT)
-        self.simple_paddle = pygame.Rect(WINDOW_WIDTH - 50 - PADDLE_WIDTH, WINDOW_HEIGHT // 2 - PADDLE_HEIGHT // 2, PADDLE_WIDTH, PADDLE_HEIGHT)
-        self.ball = pygame.Rect(WINDOW_WIDTH // 2 - BALL_SIZE // 2, WINDOW_HEIGHT // 2 - BALL_SIZE // 2, BALL_SIZE, BALL_SIZE)
-        self.ball_speed = [BALL_SPEED * random.choice((1, -1)), BALL_SPEED * random.choice((1, -1))]
+        self.snake = [(GRID_WIDTH // 2, GRID_HEIGHT // 2)]  # Snake starts at center
+        self.direction = (0, -1)  # Up
+        self.food = self._place_food()
         self.score = 0
         self.frame_iteration = 0
-        self.previous_y_distance = 0
-        self.previous_ai_y = self.ai_paddle.centery
         self._update_intelligence_level()
         state = self._get_state()
         logging.debug(f"Reset state: {state}, shape: {state.shape}")
         return state
 
+    def _place_food(self):
+        while True:
+            food = (random.randint(0, GRID_WIDTH - 1), random.randint(0, GRID_HEIGHT - 1))
+            if food not in self.snake:
+                return food
+
     def _get_state(self):
-        ai_y = (self.ai_paddle.centery / WINDOW_HEIGHT) * 2 - 1
-        simple_y = (self.simple_paddle.centery / WINDOW_HEIGHT) * 2 - 1
-        ball_x = (self.ball.centerx / WINDOW_WIDTH) * 2 - 1
-        ball_y = (self.ball.centery / WINDOW_HEIGHT) * 2 - 1
-        ball_dx, ball_dy = self.ball_speed[0] / BALL_SPEED, self.ball_speed[1] / BALL_SPEED
-        y_distance = ball_y - ai_y
-        relative_velocity_y = ball_dy - (self.ai_paddle.centery - self.previous_ai_y) / WINDOW_HEIGHT
-        state = np.array([ai_y, simple_y, ball_x, ball_y, ball_dx, ball_dy, y_distance, relative_velocity_y], dtype=float)
-        logging.debug(f"State: {state}, shape: {state.shape}, AI paddle y: {self.ai_paddle.y}")
+        head_x, head_y = self.snake[0]
+        food_x, food_y = self.food
+        # Normalize positions to [-1, 1]
+        head_x_norm = (head_x / GRID_WIDTH) * 2 - 1
+        head_y_norm = (head_y / GRID_HEIGHT) * 2 - 1
+        food_x_norm = (food_x / GRID_WIDTH) * 2 - 1
+        food_y_norm = (food_y / GRID_HEIGHT) * 2 - 1
+        # Direction as one-hot encoding
+        dir_up = 1 if self.direction == (0, -1) else 0
+        dir_down = 1 if self.direction == (0, 1) else 0
+        dir_left = 1 if self.direction == (-1, 0) else 0
+        dir_right = 1 if self.direction == (1, 0) else 0
+        # Danger indicators (wall or body in adjacent cells)
+        danger_up = 1 if head_y == 0 or (head_x, head_y - 1) in self.snake else 0
+        danger_down = 1 if head_y == GRID_HEIGHT - 1 or (head_x, head_y + 1) in self.snake else 0
+        danger_left = 1 if head_x == 0 or (head_x - 1, head_y) in self.snake else 0
+        danger_right = 1 if head_x == GRID_WIDTH - 1 or (head_x + 1, head_y) in self.snake else 0
+        state = np.array([
+            head_x_norm, head_y_norm, food_x_norm, food_y_norm,
+            dir_up, dir_down, dir_left, dir_right,
+            danger_up, danger_down, danger_left, danger_right
+        ], dtype=float)
+        logging.debug(f"State: {state}, shape: {state.shape}")
         return state
 
     def play_step(self, action):
@@ -199,66 +210,41 @@ class PongGame:
                     elif self._is_button_clicked(event.pos, 'load'):
                         self._load_saved_data()
 
-            self.previous_ai_y = self.ai_paddle.centery
-            logging.debug(f"Action chosen: {action}, AI paddle y before: {self.ai_paddle.y}")
-            if action == 0:
-                self.ai_paddle.y -= PADDLE_SPEED
-            elif action == 1:
-                self.ai_paddle.y += PADDLE_SPEED
-            self.ai_paddle.clamp_ip(self.display.get_rect())
-            logging.debug(f"AI paddle y after: {self.ai_paddle.y}")
+            # Map actions: 0=up, 1=down, 2=left, 3=right
+            new_direction = [(0, -1), (0, 1), (-1, 0), (1, 0)][action]
+            # Prevent reversing direction
+            if (new_direction[0] != -self.direction[0] or new_direction[1] != -self.direction[1]):
+                self.direction = new_direction
 
-            target_y = self.ball.centery + self.ball_speed[1] * 8
-            if self.simple_paddle.centery < target_y:
-                self.simple_paddle.y += PADDLE_SPEED_OPPONENT
-            elif self.simple_paddle.centery > target_y:
-                self.simple_paddle.y -= PADDLE_SPEED_OPPONENT
-            self.simple_paddle.clamp_ip(self.display.get_rect())
-
-            self.ball.x += self.ball_speed[0]
-            self.ball.y += self.ball_speed[1]
+            # Move snake
+            head_x, head_y = self.snake[0]
+            new_head = (head_x + self.direction[0], head_y + self.direction[1])
+            self.snake.insert(0, new_head)
 
             reward = 0
             game_over = False
-            ai_y = (self.ai_paddle.centery / WINDOW_HEIGHT) * 2 - 1
-            ball_y = (self.ball.centery / WINDOW_HEIGHT) * 2 - 1
-            current_y_distance = abs(ball_y - ai_y)
-            logging.debug(f"Current y_distance: {current_y_distance}")
-            if current_y_distance < 0.1:
-                reward += 2.0 / (1 + current_y_distance)
-            if current_y_distance < self.previous_y_distance:
-                reward += 0.5 * (self.previous_y_distance - current_y_distance)
-            if action == 0 and ball_y > ai_y:
-                reward -= 0.3
-            elif action == 1 and ball_y < ai_y:
-                reward -= 0.3
-            if self.ball.colliderect(self.ai_paddle):
-                self.ball_speed[0] = -self.ball_speed[0]
-                self.ball.x = self.ai_paddle.right
-                reward += 10
-                self.score += 1
-            elif self.ball.colliderect(self.simple_paddle):
-                self.ball_speed[0] = -self.ball_speed[0]
-                self.ball.x = self.simple_paddle.left - BALL_SIZE
-                reward -= 1
-            if self.ball.top <= 0:
-                self.ball_speed[1] = -self.ball_speed[1]
-                self.ball.y = 0
-            elif self.ball.bottom >= WINDOW_HEIGHT:
-                self.ball_speed[1] = -self.ball_speed[1]
-                self.ball.y = WINDOW_HEIGHT - BALL_SIZE
-            if self.ball.left <= 0:
+
+            # Check collisions
+            if (new_head[0] < 0 or new_head[0] >= GRID_WIDTH or
+                new_head[1] < 0 or new_head[1] >= GRID_HEIGHT or
+                new_head in self.snake[1:]):
                 reward = -10
                 game_over = True
-            elif self.ball.right >= WINDOW_WIDTH:
-                reward = 5
-                game_over = True
-            if self.frame_iteration > 1000:
-                game_over = True
-                reward = -5
+            else:
+                # Check food collision
+                if new_head == self.food:
+                    self.score += 1
+                    reward = 10
+                    self.food = self._place_food()
+                else:
+                    self.snake.pop()  # Remove tail if no food eaten
+                # Small positive reward for surviving
+                reward += 0.1
 
-            self.previous_y_distance = current_y_distance
-            logging.debug(f"Reward: {reward}, Score: {self.score}")
+            # Timeout to prevent infinite games
+            if self.frame_iteration > 100 * len(self.snake):
+                reward = -5
+                game_over = True
 
             if game_over:
                 self.scores.append(self.score)
@@ -266,27 +252,33 @@ class PongGame:
                 return reward, game_over, self.score, self.game_count
 
             self._update_ui()
-            pygame.time.Clock().tick(60)
+            pygame.time.Clock().tick(SNAKE_SPEED)
             return reward, game_over, self.score, self.game_count
         return 0, False, self.score, self.game_count
 
     def _update_ui(self):
         self.display.fill(BLACK)
-        pygame.draw.rect(self.display, AI_COLOR, self.ai_paddle)
-        pygame.draw.rect(self.display, OPPONENT_COLOR, self.simple_paddle)
-        pygame.draw.ellipse(self.display, WHITE, self.ball)
-        pygame.draw.aaline(self.display, WHITE, (WINDOW_WIDTH // 2, 0), (WINDOW_WIDTH // 2, WINDOW_HEIGHT))
+        # Draw snake
+        for segment in self.snake:
+            pygame.draw.rect(self.display, SNAKE_COLOR,
+                             (segment[0] * GRID_SIZE, segment[1] * GRID_SIZE, GRID_SIZE, GRID_SIZE))
+        # Draw food
+        pygame.draw.rect(self.display, FOOD_COLOR,
+                         (self.food[0] * GRID_SIZE, self.food[1] * GRID_SIZE, GRID_SIZE, GRID_SIZE))
+        # Draw grid
+        for x in range(0, WINDOW_WIDTH, GRID_SIZE):
+            pygame.draw.line(self.display, WHITE, (x, 0), (x, WINDOW_HEIGHT))
+        for y in range(0, WINDOW_HEIGHT, GRID_SIZE):
+            pygame.draw.line(self.display, WHITE, (0, y), (WINDOW_WIDTH, y))
 
         score_text = self.font.render(f'Score: {self.score}', True, WHITE)
         game_count_text = self.font.render(f'Game: {self.game_count}', True, WHITE)
         intelligence_text = self.font.render(f'Intelligence: {self.intelligence_level}', True, WHITE)
         epsilon_text = self.font.render(f'Epsilon: {self.agent.epsilon:.3f}', True, WHITE)
-        y_distance_text = self.font.render(f'Y-Distance: {self.previous_y_distance:.3f}', True, WHITE)
         self.display.blit(score_text, (10, 10))
         self.display.blit(game_count_text, (10, 30))
         self.display.blit(intelligence_text, (10, 50))
         self.display.blit(epsilon_text, (10, 70))
-        self.display.blit(y_distance_text, (10, 90))
 
         pause_button_rect = pygame.Rect(WINDOW_WIDTH - 70, 10, 60, 30)
         pause_color = BUTTON_HOVER_COLOR if pause_button_rect.collidepoint(pygame.mouse.get_pos()) else BUTTON_COLOR
@@ -323,7 +315,7 @@ class PongGame:
         plt.title('Training Progress')
         plt.legend()
         plt.grid(True)
-        plt.savefig('training_progress.png')
+        plt.savefig('snake_training_progress.png')
         plt.show()
         self.showing_progress = False
         self.paused = False
@@ -366,8 +358,8 @@ def main():
     if not os.path.exists('models'):
         os.makedirs('models')
 
-    state_size = 8
-    action_size = 3
+    state_size = 12  # head_x, head_y, food_x, food_y, dir(4), danger(4)
+    action_size = 4  # Up, down, left, right
     agent = Agent(state_size, action_size)
     
     file_path = select_model_file()
@@ -384,7 +376,7 @@ def main():
         logging.info("No model file selected or file not found, starting with a new model")
         print("Không có file mô hình được chọn, bắt đầu với mô hình mới.")
 
-    game = PongGame(agent)
+    game = SnakeGame(agent)
     batch_size = 32
     max_episodes = 10000
     best_score = float('-inf')
@@ -427,10 +419,10 @@ def main():
                         plt.plot(range(99, len(game.scores)), moving_avg, label='100-Episode Running Average', color='red', linewidth=2)
                     plt.xlabel('Episode')
                     plt.ylabel('Score')
-                    plt.title('Training Progress')
+                    plt.title('Snake Training Progress')
                     plt.legend()
                     plt.grid(True)
-                    plt.savefig('training_progress.png')
+                    plt.savefig('snake_training_progress.png')
                     plt.close()
                 print(f"Episode {episode} - Score: {score}, Steps: {game.frame_iteration}, Epsilon: {agent.epsilon:.3f}")
                 break
